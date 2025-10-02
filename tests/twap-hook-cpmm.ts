@@ -32,7 +32,7 @@ describe("twap-hook-cpmm", () => {
   const mint = mintKp.publicKey;
   const payer = (provider.wallet as anchor.Wallet).payer;
 
-  // Variables globales para reutilizar entre tests
+  // Global variables to reuse between tests
   let poolId: PublicKey;
   let vaultA: PublicKey;
   let vaultB: PublicKey;
@@ -41,18 +41,18 @@ describe("twap-hook-cpmm", () => {
 
   it("Should create SPL Token with Transfer HOOk", async () => {
 
-    // ===== PASO 1: Configurar el mint con Transfer Hook Extension =====
+    // ===== STEP 1: Configure the mint with Transfer Hook Extension =====
 
-    // 1.2 Definir las extensiones a utilizar del Token-2022
+    // 1.2 Define the extensions to use from Token-2022
     const extensions = [ExtensionType.TransferHook];
 
-    // 1.3 Caluclar el espacio requerido para el mint y sus extensiones
+    // 1.3 Calculate the required space for the mint and its extensions
     const space = getMintLen(extensions);
 
-    // 1.4 Obtener precio rent-exempt
+    // 1.4 Get rent-exempt price
     const lamports = await provider.connection.getMinimumBalanceForRentExemption(space);
 
-    // 1.5 Crear cuenta para el mint (reservar espacio + renta)
+    // 1.5 Create account for the mint (reserve space + rent)
     const ix0 = SystemProgram.createAccount({
       fromPubkey: payer.publicKey,
       newAccountPubkey: mintKp.publicKey,
@@ -61,7 +61,7 @@ describe("twap-hook-cpmm", () => {
       programId: TOKEN_2022_PROGRAM_ID
     })
 
-    // 1.6 Inicializar extensión Transfer Hook (ANTES del mint)
+    // 1.6 Initialize Transfer Hook extension (BEFORE the mint)
     const ix1 = createInitializeTransferHookInstruction(
       mint,                       // Token Mint account
       payer.publicKey,            // TransferHook authority account
@@ -69,7 +69,7 @@ describe("twap-hook-cpmm", () => {
       TOKEN_2022_PROGRAM_ID       // SPL Token program account
     );
 
-    // 1.7 Inicializar la mint (DESPUÉS de las extensiones)
+    // 1.7 Initialize the mint (AFTER the extensions)
     const ix2 = createInitializeMintInstruction(
       mint,
       6,
@@ -78,34 +78,34 @@ describe("twap-hook-cpmm", () => {
       TOKEN_2022_PROGRAM_ID
     );
 
-    // 1.8 Ejecutar: Crear cuenta -> Inicializar extensiones -> Inicializar mint
+    // 1.8 Execute: Create account -> Initialize extensions -> Initialize mint
     const tx = new Transaction().add(ix0).add(ix1).add(ix2);
     const signature = await provider.sendAndConfirm(tx, [mintKp]);
     console.log("Mint creada y hook registrado. Signature: ", signature);
 
-    // ===== PASO 2: Verificaciones en la Blockchain =====
+    // ===== STEP 2: Verifications on the Blockchain =====
     console.log("Verificando el estado de las cuentas en la blockchain...");
 
-    // 2.1 Verificar el estado de la cuenta del MINT 
+    // 2.1 Verify the state of the MINT account
     const mintInfo = await getMint(
       provider.connection,
       mint,
       "confirmed",
       TOKEN_2022_PROGRAM_ID
     );
-    expect(mintInfo).to.not.be.null;                                                    // El mint debe existir
-    expect(mintInfo.mintAuthority.toBase58()).to.equal(payer.publicKey.toBase58());     // Debe tener la autoridad de minteo correcta
-    expect(mintInfo.decimals).to.equal(6);                                              // Debe tener los decimales correctos
+    expect(mintInfo).to.not.be.null;                                                    // The mint must exist
+    expect(mintInfo.mintAuthority.toBase58()).to.equal(payer.publicKey.toBase58());     // Must have the correct mint authority
+    expect(mintInfo.decimals).to.equal(6);                                              // Must have the correct decimals
 
-    // 2.2 Verificar la configuración de la extensión Transfer Hook
+    // 2.2 Verify the Transfer Hook extension configuration
     const transferHookData = getTransferHook(mintInfo);
-    expect(transferHookData).to.not.be.null;                                               // La extensión debe estar inicializada
-    expect(transferHookData.programId.toBase58()).to.equal(program.programId.toBase58());  // El programId del hook debe ser el de nuestro programa
+    expect(transferHookData).to.not.be.null;                                               // The extension must be initialized
+    expect(transferHookData.programId.toBase58()).to.equal(program.programId.toBase58());  // The hook's programId must be our program's
   });
 
   it("Should create CPMM pool and initialize ExtraAccountMetaList + PriceRing", async () => {
 
-    // ===== PASO 1: Crear cuentas ATA para WSOL y MyToken =====
+    // ===== STEP 1: Create ATA accounts for WSOL and MyToken =====
     //const wsolMint = new PublicKey("So11111111111111111111111111111111111111112"); // Devnet WSOL
 
     const ataMyToken = await getOrCreateAssociatedTokenAccount(
@@ -129,7 +129,7 @@ describe("twap-hook-cpmm", () => {
       "confirmed"
     );
 
-    // Enviar 0.6 SOL a la ATA de WSOL
+    // Send 0.6 SOL to the WSOL ATA
     const solTransferIx = SystemProgram.transfer({
       fromPubkey: payer.publicKey,
       toPubkey: ataWsol.address,
@@ -140,7 +140,7 @@ describe("twap-hook-cpmm", () => {
     await provider.sendAndConfirm(fundTx, [payer])
     console.log("WSOL funded with 0.6 SOL");
 
-    // ===== PASO 2: Mintear tokens a la ATA =====
+    // ===== STEP 2: Mint tokens to the ATA =====
     const { blockhash, lastValidBlockHeight } = await provider.connection.getLatestBlockhash('confirmed');
 
     const signature = await mintTo(
@@ -156,7 +156,7 @@ describe("twap-hook-cpmm", () => {
     );
     console.log("Transacción de minteo enviada:", signature);
 
-    // Confirmar la tx
+    // Confirm the Tx
     await provider.connection.confirmTransaction({
       signature,
       blockhash,
@@ -164,9 +164,9 @@ describe("twap-hook-cpmm", () => {
     }, 'confirmed');
 
 
-    // ===== PASO 3: Crear la Pool =====
+    // ===== STEP 3: Create the Pool =====
 
-    // 3.1 Cargar SDK de Raydium
+    // 3.1 Load Raydium SDK
     const raydium = await Raydium.load({
       connection: provider.connection,
       owner: payer,
@@ -182,7 +182,7 @@ describe("twap-hook-cpmm", () => {
     })
 
 
-    // 3.2 Obtener fee configs
+    // 3.2 Get fee configs
     const [feeConfigs] = await Promise.all([raydium.api.getCpmmConfigs()]);
 
     // Fee config id (devnet pda)
@@ -223,7 +223,7 @@ describe("twap-hook-cpmm", () => {
     console.log("Simulación => logs:", simResult.value.logs);
     console.log("Simulación => error:", simResult.value.err);
 
-    // Enviar la Tx que crea la Pool
+    // Send the Tx that creates the Pool
     const { txId } = await execute({ sendAndConfirm: true })
     console.log('pool created', {
       txId,
@@ -236,7 +236,7 @@ describe("twap-hook-cpmm", () => {
       ),
     })
 
-    // Inicializar extra accounts y Ring Buffer
+    // Initialize extra accounts and Ring Buffer
     const initSig = await program.methods
       .initializeExtraAccountMetaList(
         poolId,
@@ -249,7 +249,7 @@ describe("twap-hook-cpmm", () => {
       })
       .rpc()
 
-    // Verificar que ExtraAccountMetaList se creó
+    // Verify that ExtraAccountMetaList was created
     const [extraAccountMetaListPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("extra-account-metas"), mint.toBuffer()],
       program.programId
@@ -258,7 +258,7 @@ describe("twap-hook-cpmm", () => {
     expect(extraAccountInfo).to.not.be.null;
     expect(extraAccountInfo.owner.toBase58()).to.equal(program.programId.toBase58());
 
-    // Verificar que PriceRing se inicializó correctamente
+    // Verify that PriceRing was initialized correctly
     const [priceRingPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("price-ring"), mint.toBuffer()],
       program.programId
@@ -272,7 +272,7 @@ describe("twap-hook-cpmm", () => {
 
   it("Should perform swaps, trigger the hook and update ring buffer", async () => {
 
-    // Cargar SDK de Raydium 
+    // Load Raydium SDK 
     const raydium = await Raydium.load({
       connection: provider.connection,
       owner: payer,
@@ -287,13 +287,13 @@ describe("twap-hook-cpmm", () => {
       }
     });
 
-    // Obtener información del pool
+    // Get pool information
     const data = await raydium.cpmm.getPoolInfoFromRpc(poolId.toBase58());
     const poolInfo: ApiV3PoolInfoStandardItemCpmm = data.poolInfo;
     const poolKeys: CpmmKeys | undefined = data.poolKeys;
     const rpcData: CpmmParsedRpcData = data.rpcData;
 
-    // Leer ring buffer ANTES del swap
+    // Read ring buffer BEFORE the swap
     const [priceRingPda] = PublicKey.findProgramAddressSync(
       [Buffer.from("price-ring"), mint.toBuffer()],
       program.programId
@@ -302,20 +302,20 @@ describe("twap-hook-cpmm", () => {
     const headBefore = priceRingBefore.head;
 
     /**
-     * Ejecutar un SWAP
-     */
+      * Execute a SWAP
+    */
 
-    // 1. Tengo 0.01 SOL y quiero MyToken
+    // 1. I have 0.01 SOL and I want MyToken
     const inputAmount = new anchor.BN(0.01 * 10 ** 9); // 0.01 SOL
     const inputMint = NATIVE_MINT.toBase58();
-    // 2. Determinar dirección del swap
-    const baseIn = inputMint === poolInfo.mintA.address; // false (porque WSOL es mintB)
+    // 2. Determine swap direction
+    const baseIn = inputMint === poolInfo.mintA.address;  // false (because WSOL is mintB)
 
-    // 3. Calcular cuanto VOY A RECIBIR usando las matematicas del pool
+    // 3. Calculate how much I WILL RECEIVE using pool mathematics
     const swapResult = CurveCalculator.swapBaseInput(
-      inputAmount,                                            // Damos: 0.01 SOL
-      baseIn ? rpcData.baseReserve : rpcData.quoteReserve,    // Pool tiene: 0.6 SOL (porque baseIn=false, usamos quote)
-      baseIn ? rpcData.quoteReserve : rpcData.baseReserve,    // Pool tiene: 500 MyTokens
+      inputAmount,                                            // We give: 0.01 SOL
+      baseIn ? rpcData.baseReserve : rpcData.quoteReserve,    // Pool has: 0.6 SOL (because baseIn=false, we use quote)
+      baseIn ? rpcData.quoteReserve : rpcData.baseReserve,    // Pool has: 500 MyTokens
       rpcData.configInfo!.tradeFeeRate,
       rpcData.configInfo!.creatorFeeRate,
       rpcData.configInfo!.protocolFeeRate,
@@ -324,27 +324,27 @@ describe("twap-hook-cpmm", () => {
     );
     // swapResult.outputAmount = ~8.05 MyTokens
 
-    // 4. Ejecutar el swap en la blockchain con estos cálculos
+    // 4. Execute the swap on the blockchain with these calculations
     const { execute } = await raydium.cpmm.swap({
       poolInfo,
       poolKeys,
-      inputAmount,               // Das 0.01 SOL
-      swapResult,                // Esperas recibir ~8.05 MyTokens
-      slippage: 0.01,            // Dirección: quote => base (WSOL => MyToken)
+      inputAmount,               // We give 0.01 SOL
+      swapResult,                // We expect to receive ~8.05 MyTokens
+      slippage: 0.01,            // Direction: quote => base (WSOL => MyToken)
       baseIn,
       txVersion: TxVersion.V0,
     });
 
     await execute({ sendAndConfirm: true });
 
-    // Leer ring buffer DESPUÉS del swap
+    // Read ring buffer AFTER the swap
     const priceRingAfter = await program.account.priceRing.fetch(priceRingPda);
     const headAfter = priceRingAfter.head;
 
-    // Verificar que el head avanzó exactamente 1 posición
+    // Verify that the head advanced exactly 1 position
     expect(headAfter).to.equal(headBefore + 1);
 
-    // Verificar que el precio se guardó en la posición correcta
+    // Verify that the price was saved in the correct position
     const pricePoint = priceRingAfter.points[headBefore];
     expect(pricePoint.slot.toNumber()).to.be.greaterThan(0);
     expect(pricePoint.price.toNumber()).to.be.greaterThan(0);

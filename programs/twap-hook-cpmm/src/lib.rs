@@ -16,11 +16,11 @@ declare_id!("hMU9ESApomJ8LWL1B7G3yLoGg3D7mSmowZbWoCKEgZb");
 pub mod twap_hook_cpmm {
     use super::*;
 
-    // Crea / sobrescribe la lista de cuentas extras que el SPL inyectara y inicializa el ring-buffer de precios.
+    // Creates / overwrites the list of extra accounts that SPL will inject and initializes the price ring-buffer.
     // Accounts:
-    //   0. payer                     – signer que paga
+    //   0. payer                     – signer who pays
     //   1. extra_account_meta_list   – PDA [*extra-account-metas][mint]
-    //   2. mint                      – key del mint
+    //   2. mint                      – mint key
     //   3. price_ring                – PDA [*price-ring][mint]
     //   4. system_program            – System
     pub fn initialize_extra_account_meta_list(
@@ -29,29 +29,29 @@ pub mod twap_hook_cpmm {
         token_0_vault: Pubkey,
         token_1_vault: Pubkey,
     ) -> Result<()> {
-        // 1. Cuentas con formato SplPubkey
+        // 1. Accounts with SplPubkey format
         let pool_pubkey = SplPubkey::from(pool_id.to_bytes());
         let vault_0_pubkey = SplPubkey::from(token_0_vault.to_bytes());
         let vault_1_pubkey = SplPubkey::from(token_1_vault.to_bytes());
 
-        // 2. Construir vec<ExtraAccountMeta>
-        // La primera cuenta es el pool, las siguientes dos son las bóvedas (vaults).
-        // Todas son de solo lectura ('is_readonly' = true).
+        // 2. Build vec<ExtraAccountMeta>
+        // The first account is the pool, the next two are the vaults.
+        // All are read-only ('is_readonly' = true).
         let metas = vec![
             ExtraAccountMeta::new_with_pubkey(&pool_pubkey, false, true).unwrap(),
             ExtraAccountMeta::new_with_pubkey(&vault_0_pubkey, false, true).unwrap(),
             ExtraAccountMeta::new_with_pubkey(&vault_1_pubkey, false, true).unwrap(),
         ];
 
-        // 3. Escribir lista a la cuenta
-        // El tamaño de la cuenta debe ser suficiente (en este caso, para 3 cuentas).
+        // 3. Write list to the account
+        // The account size must be enough (in this case, for 3 accounts).
         ExtraAccountMetaList::init::<ExecuteInstruction>(
             &mut ctx.accounts.extra_account_meta_list.try_borrow_mut_data()?,
             &metas,
         )
         .unwrap();
 
-        // 4. Inicializar ring buffer
+        // 4. Initialize ring buffer
         let mut ring = ctx.accounts.price_ring.load_init()?;
         ring.head = 0;
         ring.bump = ctx.bumps.price_ring;
@@ -62,37 +62,35 @@ pub mod twap_hook_cpmm {
         Ok(())
     }
 
-    // Hook ejecutado por SPL-Token-2022 antes de cada transferencia.
-    // Orden de cuentas que recibe:
-    //   0-3  : source, mint, destination, owner (siempre)
-    //   4    : extra_account_meta_list (siempre)
-    //   5... : cuentas inyectadas (pool_id, token_0_vault, token_1_vault)
+    // Hook executed by SPL-Token-2022 before each transfer.
+    // Order of accounts it receives:
+    //   0-3  : source, mint, destination, owner (always)
+    //   4    : extra_account_meta_list (always)
+    //   5... : injected accounts (pool_id, token_0_vault, token_1_vault)
     #[interface(spl_transfer_hook_interface::execute)]
     pub fn transfer_hook(ctx: Context<TransferHookAccounts>) -> Result<()> {
-
-        //   Verificar si ExtraAccountMetaList está inicializado.
-        //    Este check permite crear el pool CPMM sin fallar, ya que:
-        //    - Para crear el pool, Raydium transfiere tokens => invoca este hook
-        //    - Pero para inicializar ExtraAccountMetaList necesitamos pool_id (que aún no existe)
-        //    - Solución: permitir transfers cuando las cuentas extra no están configuradas todavía
+        //    Verify if ExtraAccountMetaList is initialized.
+        //    This check allows creating the CPMM pool without failing, since:
+        //    - To create the pool, Raydium transfers tokens => invokes this hook
+        //    - But to initialize ExtraAccountMetaList we need pool_id (which doesn't exist yet)
+        //    - Solution: allow transfers when extra accounts are not configured yet
         if ctx.accounts.extra_account_meta_list.data_is_empty() {
             msg!("Hook no inicializado, permitiendo transfer");
             return Ok(());
         }
 
-        // 1. Validar que el swap es de Raydium CPMM
+        // 1. Validate that the swap is from Raydium CPMM
         let raydium_cpmm_id = pubkey!("CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C");
-        //let raydium_cpmm_id = pubkey!("AXz2trx51zUQ35W7gonmLiQUVPSdrM82VG1KJNWdym4x"); 
         if ctx.accounts.owner.key() != raydium_cpmm_id {
             msg!("No es Raydium CPMM; skipping");
             return Ok(());
         }
 
-        // 2. Leer vaults
+        // 2. Read vaults
         let vault_0 = &ctx.accounts.token_0_vault;
         let vault_1 = &ctx.accounts.token_1_vault;
 
-        // 3. Detectar cuál de los dos mints es el que tiene transfer hook. Ese será nuestro TOKEN BASE (el que queremos precio de)
+        // 3. Verify which of the two mints has the transfer hook. That will be our BASE TOKEN (the one we want the price of)
         let mint_key = ctx.accounts.mint.key();
         let (reserve_base, reserve_quote, base_decimals, quote_decimals) =
             if vault_0.mint == mint_key {
@@ -111,9 +109,9 @@ pub mod twap_hook_cpmm {
                 )
             } else {
                 return err!(ErrorCode::MintNotInPair);
-            }; 
+            };
 
-        // 4. Calcular precio spot normalizado a 6 decimales
+        // 4. Calculate spot price normalized to 6 decimals
         let price = if reserve_base == 0 {
             0
         } else {
@@ -127,7 +125,7 @@ pub mod twap_hook_cpmm {
 
         let slot = Clock::get()?.slot;
 
-        // 5. Guardar en ring buffer
+        // 5. Save in ring buffer
         let mut ring = ctx.accounts.price_ring.load_mut()?;
         let idx = ring.head as usize % RING_BUFFER_SIZE;
         ring.points[idx] = PricePoint { slot, price };
@@ -138,26 +136,26 @@ pub mod twap_hook_cpmm {
     }
 }
 
-// Accounts para crear / sobrescribir la lista de cuentas extras.
+// Accounts to create / overwrite the extra accounts list.
 #[derive(Accounts)]
 pub struct InitializeExtraAccountMetaList<'info> {
     #[account(mut)]
     payer: Signer<'info>,
 
-    /// CHECK: PDA que almacenará la lista de cuentas extras.
+    /// CHECK: PDA that will store the extra accounts list.
     #[account(
         init,
         payer = payer,
-        space = ExtraAccountMetaList::size_of(3).unwrap(), // Espacio para 3 cuentas
+        space = ExtraAccountMetaList::size_of(3).unwrap(), // Space for 3 accounts
         seeds = [b"extra-account-metas", mint.key().as_ref()],
         bump
     )]
     pub extra_account_meta_list: AccountInfo<'info>,
 
-    /// CHECK: Mint del token; solo necesitamos su key para la semilla.
+    /// CHECK: Token mint; we only need its key for the seed.
     pub mint: AccountInfo<'info>,
 
-    /// PDA que almacenará el ring-buffer de precios.
+    /// PDA that will store the price ring-buffer.
     #[account(
         init,
         payer = payer,
@@ -170,33 +168,33 @@ pub struct InitializeExtraAccountMetaList<'info> {
     pub system_program: Program<'info, System>,
 }
 
-// Cuentas que SIEMPRE manda el SPL antes de llamar al hook.
+// Accounts that SPL ALWAYS sends before calling the hook.
 #[derive(Accounts)]
 pub struct TransferHookAccounts<'info> {
-    /// CHECK: token account origen
+    /// CHECK: source token account
     pub source: UncheckedAccount<'info>,
-    /// CHECK: mint del token (el que tiene transfer hook)
+    /// CHECK: token mint (the one with transfer hook)
     pub mint: UncheckedAccount<'info>,
-    /// CHECK: token account destino
+    /// CHECK: destination token account
     pub destination: UncheckedAccount<'info>,
-    /// CHECK: dueño de source (será el programa de Raydium)
+    /// CHECK: owner of source (will be the Raydium program)
     pub owner: UncheckedAccount<'info>,
 
-    /// CHECK: lista de cuentas extras que el SPL debe inyectar
+    /// CHECK: list of extra accounts that SPL must inject
     #[account(
         seeds = [b"extra-account-metas", mint.key().as_ref()],
         bump
     )]
     pub extra_account_meta_list: UncheckedAccount<'info>,
 
-    /// CHECK: pool de Raydium CPMM
+    /// CHECK: Raydium CPMM pool
     pub raydium_cpmm_pool: UncheckedAccount<'info>,
-    /// CHECK: vault 0 del pool
+    /// CHECK: pool vault 0
     pub token_0_vault: Account<'info, TokenAccount>,
-    /// CHECK: vault 1 del pool
+    /// CHECK: pool vault 1
     pub token_1_vault: Account<'info, TokenAccount>,
 
-    // PDA que almacena el ring-buffer
+    // PDA that stores the ring-buffer
     #[account(
         mut,
         seeds = [b"price-ring", mint.key().as_ref()],
@@ -204,13 +202,13 @@ pub struct TransferHookAccounts<'info> {
     )]
     pub price_ring: AccountLoader<'info, PriceRing>,
 
-    /// Mint info para leer decimales
-    #[account(
-        address = mint.key()
-    )]
-    pub mint_info: Account<'info, Mint>,
+    // /// Mint info to read decimals
+    // #[account(
+    //     address = mint.key()
+    // )]
+    // pub mint_info: Account<'info, Mint>,
 
-    /// Mint info de los vaults (para decimales)
+    /// Mint info of the vaults (for decimals)
     #[account(
         address = token_0_vault.mint
     )]
@@ -246,6 +244,6 @@ const RING_BUFFER_SIZE: usize = 512;
 
 #[error_code]
 pub enum ErrorCode {
-    #[msg("El mint no pertenece al par de vaults")]
+    #[msg("The mint does not belong to the vault pair")]
     MintNotInPair,
 }

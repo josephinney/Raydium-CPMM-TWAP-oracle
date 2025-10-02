@@ -1,0 +1,30 @@
+[package]
+name = "twap-hook-cpmm"
+version = "0.1.0"
+description = "Created with Anchor"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "twap_hook_cpmm"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["init-if-needed", "interface-instructions"] }
+anchor-spl = "0.31.1"
+spl-transfer-hook-interface = "0.10.0"
+bytemuck = "1.16"
+
+# v0.10.0 usa spl-discriminator v0.4.1, compatible con spl-transfer-hook-interface "0.10.0"
+# v0.11.0 usa spl-discriminator v0.5.1, causando conflictos de traits
+spl-tlv-account-resolution = "0.10.0"
+
+spl-type-length-value = "0.9.0"
+
